@@ -233,35 +233,31 @@ private Expr getQualifier(QualifiableExpr e) {
 }
 
 /**
- * Holds if expression `e` constantly matches (`value = true`) or constantly
- * non-matches (`value = false`).
+ * Holds if pattern expression `pe` constantly matches (`value = true`) or
+ * constantly non-matches (`value = false`).
  */
-private predicate isMatchingConstant(Expr e, boolean value) {
-  exists(Switch s | mustHaveMatchingCompletion(s, e) |
-    exists(Expr stripped | stripped = s.getExpr().stripCasts() |
-      exists(Case c, string strippedValue |
-        c = s.getACase() and
-        e = c.getPattern() and
-        strippedValue = stripped.getValue()
-      |
-        if strippedValue = e.getValue() then value = true else value = false
+private predicate isMatchingConstant(PatternExpr pe, boolean value) {
+  exists(Expr e, boolean inverted | mustHaveMatchingCompletion(e, pe, inverted) |
+    exists(Expr stripped | stripped = e.stripCasts() |
+      exists(string strippedValue |
+        strippedValue = stripped.getValue() and
+        if strippedValue = pe.getValue() then value = inverted.booleanNot() else value = inverted
       )
       or
-      exists(Case c, TypePatternExpr tpe, Type t, Type strippedType | c = s.getACase() |
-        tpe = c.getPattern() and
-        e = tpe and
+      exists(TypePatternExpr tpe, Type t, Type strippedType |
+        tpe = pe and
         t = tpe.getCheckedType() and
         strippedType = stripped.getType() and
         not t.isImplicitlyConvertibleTo(strippedType) and
         not t instanceof Interface and
         not t.containsTypeParameters() and
         not strippedType.containsTypeParameters() and
-        value = false
+        value = inverted
       )
     )
     or
-    e instanceof DiscardPatternExpr and
-    value = true
+    pe instanceof DiscardPatternExpr and
+    value = inverted.booleanNot()
   )
 }
 
@@ -518,14 +514,33 @@ predicate switchMatching(Switch s, Case c, PatternExpr pe) {
   pe = c.getPattern()
 }
 
-private predicate mustHaveMatchingCompletion(Switch s, PatternExpr pe) { switchMatching(s, _, pe) }
+/**
+ * Holds if `pe` must have a matching completion, and `e` is the expression
+ * that is being matched. `inverted` indicates whether `pe` is matched
+ * positively (`inverted = false`) or negatively (`inverted = true`) against
+ * `e`.
+ */
+private predicate mustHaveMatchingCompletion(Expr e, PatternExpr pe, boolean inverted) {
+  exists(Switch s |
+    switchMatching(s, _, pe) and
+    e = s.getExpr() and
+    inverted = false
+  )
+  or
+  pe = any(IsExpr ie | inBooleanContext(ie) and e = ie.getExpr()).getPattern() and
+  inverted = false
+  or
+  pe =
+    any(UnaryPatternExpr upe | mustHaveMatchingCompletion(e, upe, inverted.booleanNot()))
+        .getPattern()
+}
 
 /**
  * Holds if a normal completion of `cfe` must be a matching completion. Thats is,
  * whether `cfe` determines a match in a `switch` statement or `catch` clause.
  */
 private predicate mustHaveMatchingCompletion(ControlFlowElement cfe) {
-  mustHaveMatchingCompletion(_, cfe)
+  mustHaveMatchingCompletion(_, cfe, _)
   or
   cfe instanceof SpecificCatchClause
 }
@@ -565,7 +580,13 @@ class SimpleCompletion extends NonNestedNormalCompletion, TSimpleCompletion {
  * completion (`NullnessCompletion`), a matching completion (`MatchingCompletion`),
  * or an emptiness completion (`EmptinessCompletion`).
  */
-abstract class ConditionalCompletion extends NonNestedNormalCompletion { }
+abstract class ConditionalCompletion extends NonNestedNormalCompletion {
+  /** Gets the Boolean value of this completion. */
+  abstract boolean getValue();
+
+  /** Gets the dual completion. */
+  abstract ConditionalCompletion getDual();
+}
 
 /**
  * A completion that represents evaluation of an expression
@@ -576,10 +597,9 @@ class BooleanCompletion extends ConditionalCompletion {
 
   BooleanCompletion() { this = TBooleanCompletion(value) }
 
-  /** Gets the Boolean value of this completion. */
-  boolean getValue() { result = value }
+  override boolean getValue() { result = value }
 
-  BooleanCompletion getDual() { result = TBooleanCompletion(value.booleanNot()) }
+  override BooleanCompletion getDual() { result = TBooleanCompletion(value.booleanNot()) }
 
   override BooleanSuccessor getAMatchingSuccessorType() { result.getValue() = value }
 
@@ -611,6 +631,10 @@ class NullnessCompletion extends ConditionalCompletion, TNullnessCompletion {
   /** Holds if the last sub expression of this expression evaluates to a non-`null` value. */
   predicate isNonNull() { value = false }
 
+  override boolean getValue() { result = value }
+
+  override NullnessCompletion getDual() { result = TNullnessCompletion(value.booleanNot()) }
+
   override NullnessSuccessor getAMatchingSuccessorType() { result.getValue() = value }
 
   override string toString() { if this.isNull() then result = "null" else result = "non-null" }
@@ -631,6 +655,10 @@ class MatchingCompletion extends ConditionalCompletion, TMatchingCompletion {
   /** Holds if there is not a match. */
   predicate isNonMatch() { value = false }
 
+  override boolean getValue() { result = value }
+
+  override MatchingCompletion getDual() { result = TMatchingCompletion(value.booleanNot()) }
+
   override MatchingSuccessor getAMatchingSuccessorType() { result.getValue() = value }
 
   override string toString() { if this.isMatch() then result = "match" else result = "no-match" }
@@ -647,6 +675,10 @@ class EmptinessCompletion extends ConditionalCompletion, TEmptinessCompletion {
 
   /** Holds if the emptiness test evaluates to `true`. */
   predicate isEmpty() { value = true }
+
+  override boolean getValue() { result = value }
+
+  override EmptinessCompletion getDual() { result = TEmptinessCompletion(value.booleanNot()) }
 
   override EmptinessSuccessor getAMatchingSuccessorType() { result.getValue() = value }
 
