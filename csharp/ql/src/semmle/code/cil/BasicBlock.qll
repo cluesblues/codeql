@@ -240,6 +240,9 @@ class BasicBlock extends Cached::TBasicBlockStart {
 
   /** Gets a textual representation of this basic block. */
   string toString() { result = getFirstNode().toString() }
+
+  /** Gets the location of this basic block. */
+  Location getLocation() { result = this.getFirstNode().getLocation() }
 }
 
 /**
